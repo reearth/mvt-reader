@@ -1,19 +1,19 @@
 [package]
 name = "mvt-reader"
-version = "1.5.0"
+version = "2.1.0"
 description = "A library for decoding and reading mapbox vector tiles in Rust and WebAssembly"
 authors = ["Paul Lange <paul.lange@data-experts.de>"]
 repository = "https://github.com/codeart1st/mvt-reader"
 keywords = ["rust", "webassembly", "wasm", "pbf", "mvt"]
 include = ["/src", "/LICENSE", "/build.rs", "vector_tile.proto"]
 license = "MIT"
-edition = "2021"
+edition = "2024"
 
 [lib]
 crate-type = ["cdylib", "rlib"]
 
 [features]
-wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "geojson", "serde"]
+wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "geojson", "serde", "serde_json"]
 
 [dependencies]
 geo-types = "0.7"
@@ -23,11 +23,12 @@ serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys = { version = "0.3", optional = true }
 geojson = { version = "0.24", optional = true }
 serde = { version = "1.0", optional = true }
+serde_json = { version = "1.0", optional = true }
 
 [dev-dependencies]
-serde = { version = "1.0.204", features = ["derive"] }
-serde_json = "1.0.120"
-prost = { version = "0.13.1" } # for testing we need default-features to be enabled
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+prost = { version = "0.13.5" } # for testing we need default-features to be enabled
 
 [build-dependencies]
-prost-build = "0.13.1"
+prost-build = "0.13.5"

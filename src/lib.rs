@@ -10,7 +10,7 @@
 //!
 //! ```toml
 //! [dependencies]
-//! mvt-reader = "1.5.0"
+//! mvt-reader = "2.1.0"
 //! ```
 //!
 //! Then, you can import and use the library in your code:
@@ -50,7 +50,7 @@
 //!
 //! ```toml
 //! [dependencies.mvt-reader]
-//! version = "1.5.0"
+//! version = "2.1.0"
 //! features = ["wasm"]
 //! ```
 //!
@@ -60,20 +60,23 @@
 
 pub mod error;
 pub mod feature;
+pub mod layer;
 
 mod vector_tile;
 
-use feature::Feature;
+use feature::{Feature, Value};
 use geo_types::{
   Coord, Geometry, LineString, MultiLineString, MultiPoint, MultiPolygon, Point, Polygon,
 };
-pub use prost::{bytes::Bytes, Message};
+
+use layer::Layer;
+use prost::{Message, bytes::Bytes};
 
 /// The dimension used for the vector tile.
 const DIMENSION: u32 = 2;
 
-pub use vector_tile::*;
 use tile::GeomType;
+pub use vector_tile::*;
 
 /// Reader for decoding and accessing vector tile data.
 pub struct Reader {
@@ -134,21 +137,43 @@ impl Reader {
   /// }
   /// ```
   pub fn get_layer_names(&self) -> Result<Vec<String>, error::ParserError> {
-    let mut layer_names = Vec::with_capacity(self.tile.layers.len());
-    for layer in self.tile.layers.iter() {
-      match layer.version {
-        1 | 2 => {
-          layer_names.push(layer.name.clone());
-        }
-        _ => {
-          return Err(error::ParserError::new(error::VersionError::new(
-            layer.name.clone(),
-            layer.version,
-          )))
-        }
-      }
-    }
-    Ok(layer_names)
+    process_layers(&self.tile.layers, |layer, _| layer.name.clone())
+  }
+
+  /// Retrieves metadata about the layers in the vector tile.
+  ///
+  /// # Returns
+  ///
+  /// A result containing a vector of `Layer` structs if successful, or a `ParserError` if there is an error parsing the tile.
+  ///
+  /// # Examples
+  ///
+  /// ```
+  /// use mvt_reader::Reader;
+  ///
+  /// let data = vec![/* Vector tile data */];
+  /// let reader = Reader::new(data).unwrap();
+  ///
+  /// match reader.get_layer_metadata() {
+  ///   Ok(layers) => {
+  ///     for layer in layers {
+  ///       println!("Layer: {}", layer.name);
+  ///       println!("Extent: {}", layer.extent);
+  ///     }
+  ///   }
+  ///   Err(error) => {
+  ///     todo!();
+  ///   }
+  /// }
+  /// ```
+  pub fn get_layer_metadata(&self) -> Result<Vec<Layer>, error::ParserError> {
+    process_layers(&self.tile.layers, |layer, index| Layer {
+      layer_index: index,
+      version: layer.version,
+      name: layer.name.clone(),
+      feature_count: layer.features.len(),
+      extent: layer.extent.unwrap_or(4096),
+    })
   }
 
   /// Retrieves the features of a specific layer in the vector tile.
@@ -205,13 +230,14 @@ impl Reader {
 
                 features.push(Feature {
                   geometry: parsed_geometry,
+                  id: feature.id,
                   properties: Some(parsed_tags),
                 });
               }
               Err(error) => {
                 return Err(error::ParserError::new(error::DecodeError::new(Box::new(
                   error,
-                ))))
+                ))));
               }
             }
           }
@@ -249,56 +275,81 @@ impl Reader {
   /// }
   /// ```
   pub fn get_extent(&self, layer_index: usize) -> u32 {
-    self.tile.layers.get(layer_index)
-        .and_then(|layer| layer.extent)
-        .unwrap_or(4096)
+    self
+      .tile
+      .layers
+      .get(layer_index)
+      .and_then(|layer| layer.extent)
+      .unwrap_or(4096)
   }
+}
+
+fn process_layers<T, F>(
+  layers: &[vector_tile::tile::Layer],
+  mut processor: F,
+) -> Result<Vec<T>, error::ParserError>
+where
+  F: FnMut(&vector_tile::tile::Layer, usize) -> T,
+{
+  let mut results = Vec::with_capacity(layers.len());
+  for (index, layer) in layers.iter().enumerate() {
+    match layer.version {
+      1 | 2 => results.push(processor(layer, index)),
+      _ => {
+        return Err(error::ParserError::new(error::VersionError::new(
+          layer.name.clone(),
+          layer.version,
+        )));
+      }
+    }
+  }
+  Ok(results)
 }
 
 fn parse_tags(
   tags: &[u32],
   keys: &[String],
-  values: &[tile::Value],
-) -> Result<std::collections::HashMap<String, String>, error::ParserError> {
+  values: &[vector_tile::tile::Value],
+) -> Result<std::collections::HashMap<String, Value>, error::ParserError> {
   let mut result = std::collections::HashMap::new();
   for item in tags.chunks(2) {
     if item.len() != 2
-      || item[0] > keys.len().try_into().unwrap()
-      || item[1] > values.len().try_into().unwrap()
+      || item[0] >= keys.len().try_into().unwrap()
+      || item[1] >= values.len().try_into().unwrap()
     {
       return Err(error::ParserError::new(error::TagsError::new()));
     }
     result.insert(
-      (*keys.get(item[0] as usize).expect("item not found")).clone(),
-      get_string_value((*values.get(item[1] as usize).expect("item not found")).clone()),
+      keys[item[0] as usize].clone(),
+      map_value(values[item[1] as usize].clone()),
     );
   }
   Ok(result)
 }
 
-fn get_string_value(value: tile::Value) -> String {
-  if value.string_value.is_some() {
-    return value.string_value.unwrap();
+fn map_value(value: vector_tile::tile::Value) -> Value {
+  if let Some(s) = value.string_value {
+    return Value::String(s);
   }
-  if value.float_value.is_some() {
-    return value.float_value.unwrap().to_string();
+  if let Some(f) = value.float_value {
+    return Value::Float(f);
   }
-  if value.double_value.is_some() {
-    return value.double_value.unwrap().to_string();
+  if let Some(d) = value.double_value {
+    return Value::Double(d);
   }
-  if value.int_value.is_some() {
-    return value.int_value.unwrap().to_string();
+  if let Some(i) = value.int_value {
+    return Value::Int(i);
   }
-  if value.uint_value.is_some() {
-    return value.uint_value.unwrap().to_string();
+  if let Some(u) = value.uint_value {
+    return Value::UInt(u);
   }
-  if value.sint_value.is_some() {
-    return value.sint_value.unwrap().to_string();
+  if let Some(s) = value.sint_value {
+    return Value::SInt(s);
   }
-  if value.bool_value.is_some() {
-    return value.bool_value.unwrap().to_string();
+  if let Some(b) = value.bool_value {
+    return Value::Bool(b);
   }
-  String::new()
+  Value::Null
 }
 
 fn shoelace_formula(points: &[Point<f32>]) -> f32 {
@@ -384,12 +435,12 @@ fn parse_geometry(
       if parameter_count % DIMENSION == 0 {
         cursor[0] = match cursor[0].checked_add(integer_value) {
           Some(result) => result,
-          None => std::i32::MAX, // clip value
+          None => i32::MAX, // clip value
         };
       } else {
         cursor[1] = match cursor[1].checked_add(integer_value) {
           Some(result) => result,
-          None => std::i32::MAX, // clip value
+          None => i32::MAX, // clip value
         };
         coordinates.push(Coord {
           x: cursor[0] as f32,
@@ -427,7 +478,10 @@ fn parse_geometry(
         ));
         return Ok(MultiPolygon::new(polygons).into());
       }
-      Ok(polygons.first().unwrap().to_owned().into())
+      match polygons.first() {
+        Some(polygon) => Ok(polygon.to_owned().into()),
+        None => Err(error::ParserError::new(error::GeometryError::new())),
+      }
     }
     GeomType::Unknown => Err(error::ParserError::new(error::GeometryError::new())),
   }
@@ -436,10 +490,27 @@ fn parse_geometry(
 #[cfg(feature = "wasm")]
 pub mod wasm {
 
-  use geojson::{Feature, GeoJson, JsonObject};
-  use serde::Serialize;
+  use crate::feature::Value;
+  use geojson::{Feature, GeoJson, JsonObject, JsonValue, feature::Id};
+  use serde::ser::{Serialize, SerializeStruct};
   use serde_wasm_bindgen::Serializer;
   use wasm_bindgen::prelude::*;
+
+  /// Converts a `Value` into a `serde_json::Value`.
+  impl From<Value> for JsonValue {
+    fn from(value: Value) -> Self {
+      match value {
+        Value::Null => JsonValue::Null,
+        Value::Bool(b) => JsonValue::from(b),
+        Value::Int(i) => JsonValue::from(i),
+        Value::UInt(u) => JsonValue::from(u),
+        Value::SInt(s) => JsonValue::from(s),
+        Value::Float(f) => JsonValue::from(f),
+        Value::Double(d) => JsonValue::from(d),
+        Value::String(s) => JsonValue::from(s),
+      }
+    }
+  }
 
   /// Converts a `super::feature::Feature` into a `wasm_bindgen::JsValue`.
   impl From<super::feature::Feature> for wasm_bindgen::JsValue {
@@ -455,12 +526,34 @@ pub mod wasm {
       let geojson = GeoJson::Feature(Feature {
         bbox: None,
         geometry: Some(feature.get_geometry().into()),
-        id: None,
+        id: feature.id.map(|id| Id::Number(id.into())),
         properties,
         foreign_members: None,
       });
 
       geojson.serialize(&Serializer::json_compatible()).unwrap()
+    }
+  }
+
+  /// Converts a `super::layer::Layer` into a `wasm_bindgen::JsValue`.
+  impl From<super::layer::Layer> for wasm_bindgen::JsValue {
+    fn from(layer: super::layer::Layer) -> Self {
+      layer.serialize(&Serializer::json_compatible()).unwrap()
+    }
+  }
+
+  impl Serialize for super::layer::Layer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+      S: serde::ser::Serializer,
+    {
+      let mut state = serializer.serialize_struct("Layer", 5)?;
+      state.serialize_field("layer_index", &self.layer_index)?;
+      state.serialize_field("version", &self.version)?;
+      state.serialize_field("name", &self.name)?;
+      state.serialize_field("feature_count", &self.feature_count)?;
+      state.serialize_field("extent", &self.extent)?;
+      state.end()
     }
   }
 
@@ -521,25 +614,30 @@ pub mod wasm {
     /// ```
     #[wasm_bindgen(js_name = getLayerNames)]
     pub fn get_layer_names(&self, error_callback: Option<js_sys::Function>) -> JsValue {
-      match &self.reader {
-        Some(reader) => match reader.get_layer_names() {
-          Ok(layer_names) => JsValue::from(
-            layer_names
-              .into_iter()
-              .map(JsValue::from)
-              .collect::<js_sys::Array>(),
-          ),
-          Err(error) => {
-            if let Some(callback) = error_callback {
-              callback
-                .call1(&JsValue::NULL, &JsValue::from_str(&format!("{:?}", error)))
-                .unwrap();
-            }
-            JsValue::NULL
-          }
-        },
-        None => JsValue::NULL,
-      }
+      self.handle_result(|reader| reader.get_layer_names(), error_callback)
+    }
+
+    /// Retrieves the layer metadata present in the vector tile.
+    ///
+    /// # Arguments
+    ///
+    /// * `error_callback` - An optional JavaScript callback function to handle errors. It should accept a single parameter which will contain the error message as a string.
+    ///
+    /// # Returns
+    ///
+    /// A JavaScript array containing the layer metadata as objects.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let layers = reader.getLayerMetadata(handleErrors);
+    /// for (let i = 0; i < layers.length; i++) {
+    ///   console.log(layers[i].name);
+    /// }
+    /// ```
+    #[wasm_bindgen(js_name = getLayerMetadata)]
+    pub fn get_layer_metadata(&self, error_callback: Option<js_sys::Function>) -> JsValue {
+      self.handle_result(|reader| reader.get_layer_metadata(), error_callback)
     }
 
     /// Retrieves the features of a specific layer in the vector tile.
@@ -567,14 +665,22 @@ pub mod wasm {
       layer_index: usize,
       error_callback: Option<js_sys::Function>,
     ) -> JsValue {
+      self.handle_result(|reader| reader.get_features(layer_index), error_callback)
+    }
+
+    fn handle_result<T, F>(&self, operation: F, error_callback: Option<js_sys::Function>) -> JsValue
+    where
+      T: IntoIterator,
+      T::Item: Into<JsValue>,
+      F: FnOnce(&super::Reader) -> Result<T, super::error::ParserError>,
+    {
       match &self.reader {
-        Some(reader) => match reader.get_features(layer_index) {
-          Ok(features) => JsValue::from(
-            features
-              .into_iter()
-              .map(JsValue::from)
-              .collect::<js_sys::Array>(),
-          ),
+        Some(reader) => match operation(reader) {
+          Ok(result) => result
+            .into_iter()
+            .map(Into::into)
+            .collect::<js_sys::Array>()
+            .into(),
           Err(error) => {
             if let Some(callback) = error_callback {
               callback

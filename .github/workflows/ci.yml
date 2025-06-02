@@ -10,7 +10,6 @@ on:
       - '!main'
       - '!beta'
       - '!alpha'
-  pull_request:
 
 env:
   CARGO_TERM_COLOR: always
@@ -25,7 +24,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository and submodules
-        uses: actions/checkout@v4.1.7
+        uses: actions/checkout@v4.2.2
         with:
           submodules: recursive
 
@@ -49,7 +48,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository and submodules
-        uses: actions/checkout@v4.1.7
+        uses: actions/checkout@v4.2.2
         with:
           submodules: recursive
 
@@ -72,7 +71,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository and submodules
-        uses: actions/checkout@v4.1.7
+        uses: actions/checkout@v4.2.2
         with:
           submodules: recursive
 
@@ -86,7 +85,7 @@ jobs:
           wasm-pack build --release --target nodejs -d pkg/node -- --features wasm
 
       - name: Upload wasm-pack build output
-        uses: actions/upload-artifact@v4.3.4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: wasm-pack-build
           path: pkg
@@ -103,7 +102,7 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository and submodules
-        uses: actions/checkout@v4.1.7
+        uses: actions/checkout@v4.2.2
         with:
           submodules: recursive
 
@@ -128,18 +127,18 @@ jobs:
     runs-on: ubuntu-22.04
     steps:
       - name: Checkout repository and submodules
-        uses: actions/checkout@v4.1.7
+        uses: actions/checkout@v4.2.2
         with:
           submodules: recursive
 
       - name: Download wasm-pack build output
-        uses: actions/download-artifact@v4.1.8
+        uses: actions/download-artifact@v4.3.0
         with:
           name: wasm-pack-build
           path: pkg
 
       - name: Setup node
-        uses: actions/setup-node@v4.0.3
+        uses: actions/setup-node@v4.4.0
         with:
           node-version: "lts/*"
 
