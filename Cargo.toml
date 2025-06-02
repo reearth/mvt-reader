@@ -13,6 +13,7 @@ edition = "2024"
 crate-type = ["cdylib", "rlib"]
 
 [features]
+default = ["serde"]
 wasm = ["wasm-bindgen", "serde-wasm-bindgen", "js-sys", "geojson", "serde", "serde_json"]
 
 [dependencies]
